@@ -1,5 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from backend.database import get_db_connection
 
 
 app = FastAPI()
@@ -12,7 +13,7 @@ class Field(BaseModel):
     area_acres: float
 
 
-fields = []
+
 
 
 @app.get("/")
@@ -30,30 +31,68 @@ def health_check():
 
 @app.post("/api/fields")
 def create_field(field: Field):
-    field_id = len(fields) + 1
+    connection = get_db_connection()
+    cursor = connection.cursor()
 
-    field_data = {
+    query = """
+        INSERT INTO fields (name, location, crop, area_acres)
+        VALUES (%s, %s, %s, %s)
+    """
+
+    values = (
+        field.name,
+        field.location,
+        field.crop,
+        field.area_acres
+    )
+
+    cursor.execute(query, values)
+    connection.commit()
+
+    field_id = cursor.lastrowid
+
+    cursor.close()
+    connection.close()
+
+    return {
         "id": field_id,
         **field.model_dump()
     }
 
-    fields.append(field_data)
-
-    return field_data
-
 
 @app.get("/api/fields")
 def get_fields():
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    cursor.execute("SELECT * FROM fields ORDER BY id")
+
+    fields = cursor.fetchall()
+
+    cursor.close()
+    connection.close()
+
     return fields
 
 
 @app.get("/api/fields/{field_id}")
 def get_field(field_id: int):
-    for field in fields:
-        if field["id"] == field_id:
-            return field
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
 
-    raise HTTPException(
-        status_code=404,
-        detail="Field not found"
-    )
+    query = "SELECT * FROM fields WHERE id = %s"
+
+    cursor.execute(query, (field_id,))
+
+    field = cursor.fetchone()
+
+    cursor.close()
+    connection.close()
+
+    if field is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Field not found"
+        )
+
+    return field
