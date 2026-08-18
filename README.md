@@ -536,4 +536,8 @@ This project is currently intended for educational, research, and Smart India Ha
 
 ### 🌾 AgriShield AI
 
+
+### At last i want to say that it will not harm at last so please everybody start to contribute
+
+
 **Predict Early. Act Early. Protect Agriculture.**
