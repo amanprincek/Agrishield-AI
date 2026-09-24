@@ -12,7 +12,7 @@ DB_USER = os.getenv("DB_USER", "root")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "password")
 DB_HOST = os.getenv("DB_HOST", "localhost")
 DB_PORT = os.getenv("DB_PORT", "3306")
-DB_NAME = os.getenv("DB_NAME", "agrishield_db")
+DB_NAME = os.getenv("DB_NAME", "agrishield")
 
 # Standard connection URL: mysql+pymysql://<user>:<password>@<host>:<port>/<dbname>
 # SQLite fallback support included for zero-friction local developer testing without a running MySQL instance
