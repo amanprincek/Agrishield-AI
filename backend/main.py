@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -37,12 +39,16 @@ def root():
     }
 
 # ============================================================
-# CORS
+# CORS — restricted to explicit origins (no wildcard + credentials)
+# Override via CORS_ORIGINS or ALLOWED_ORIGINS env (comma-separated)
 # ============================================================
+
+_cors_env = os.getenv("CORS_ORIGINS") or os.getenv("ALLOWED_ORIGINS") or "http://localhost:3000,http://127.0.0.1:3000"
+_allowed_origins = [o.strip() for o in _cors_env.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

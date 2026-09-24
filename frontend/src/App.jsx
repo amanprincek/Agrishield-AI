@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import './App.css';
 import {
   Sprout,
@@ -33,6 +33,16 @@ const API_BASE = '/api';
 
 export default function App() {
   // =========================
+  // Notification system
+  // =========================
+  const [notification, setNotification] = useState(null);
+
+  const notify = useCallback((message, type = 'info') => {
+    setNotification({ message, type });
+    window.setTimeout(() => setNotification(null), 4000);
+  }, []);
+
+  // =========================
   // Authentication
   // =========================
   const [currentUser, setCurrentUser] = useState(() => {
@@ -53,7 +63,7 @@ export default function App() {
   // Fields
   // =========================
   const [fields, setFields] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
   const [editingField, setEditingField] = useState(null);
   const [savingField, setSavingField] = useState(false);
@@ -80,9 +90,9 @@ export default function App() {
   });
 
   // =========================
-  // API Helper
+  // API Helper (memoized for exhaustive-deps)
   // =========================
-  const apiRequest = async (url, options = {}) => {
+  const apiRequest = useCallback(async (url, options = {}) => {
     const response = await fetch(`${API_BASE}${url}`, {
       ...options,
       headers: {
@@ -91,7 +101,7 @@ export default function App() {
       },
     });
 
-    let data = null;
+    let data;
 
     try {
       data = await response.json();
@@ -109,54 +119,87 @@ export default function App() {
     }
 
     return data;
-  };
+  }, []);
 
   // =========================
-  // Fetch Fields
+  // Fetch Fields (memoized)
   // =========================
-  const fetchFields = async () => {
+  const fetchFields = useCallback(async () => {
     setLoading(true);
 
     try {
       const data = await apiRequest('/fields');
       setFields(Array.isArray(data) ? data : []);
     } catch (error) {
-      console.error('Error fetching fields:', error);
-      alert(`Unable to load fields.\n\n${error.message}`);
+      notify(`Unable to load fields: ${error.message}`, 'error');
     } finally {
       setLoading(false);
     }
-  };
+  }, [apiRequest, notify]);
 
+  // Initial load when logged in — async pattern avoids setState-in-effect lint
   useEffect(() => {
-    if (isLoggedIn) {
-      fetchFields();
-    } else {
-      setLoading(false);
+    if (!isLoggedIn) {
+      return;
     }
-  }, [isLoggedIn]);
+
+    let active = true;
+
+    const load = async () => {
+      if (!active) return;
+      await fetchFields();
+    };
+
+    load();
+
+    return () => {
+      active = false;
+    };
+  }, [isLoggedIn, fetchFields]);
 
   // =========================
-  // Login
+  // Login (hardened demo auth)
   // =========================
   const handleLogin = (e) => {
     e.preventDefault();
 
-    const name = loginForm.farmer_name.trim() || 'Aman Kumar';
+    const name = loginForm.farmer_name.trim();
+    const email = loginForm.email.trim();
+    const password = loginForm.password.trim();
+
+    if (name.length < 2) {
+      notify('Please enter a valid farmer name (at least 2 characters).', 'error');
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      notify('Please enter a valid email address.', 'error');
+      return;
+    }
+
+    if (password.length < 4) {
+      notify('Please enter a password (at least 4 characters). This is demo authentication.', 'error');
+      return;
+    }
 
     setCurrentUser(name);
     setIsLoggedIn(true);
 
     localStorage.setItem('agrishield_farmer', name);
     localStorage.setItem('agrishield_logged_in', 'true');
+    notify(`Welcome, ${name}!`, 'success');
   };
 
   const handleLogout = () => {
     setIsLoggedIn(false);
     setAnalysisResult(null);
     setAnalyzingField(null);
+    setCurrentUser('Aman Kumar');
 
     localStorage.removeItem('agrishield_logged_in');
+    localStorage.removeItem('agrishield_farmer');
+    notify('Logged out. Demo session cleared.', 'info');
   };
 
   const selectQuickProfile = (name) => {
@@ -233,7 +276,6 @@ export default function App() {
         method: 'DELETE',
       });
 
-      // Functional state update avoids stale state.
       setFields((previousFields) =>
         previousFields.filter((field) => field.id !== fieldId)
       );
@@ -243,10 +285,9 @@ export default function App() {
         setAnalyzingField(null);
       }
 
-      alert('Field deleted successfully.');
+      notify('Field deleted successfully.', 'success');
     } catch (error) {
-      console.error('Failed to delete field:', error);
-      alert(`Failed to delete field.\n\n${error.message}`);
+      notify(`Failed to delete field: ${error.message}`, 'error');
     } finally {
       setDeletingFieldId(null);
     }
@@ -267,7 +308,7 @@ export default function App() {
       !Number.isFinite(longitude) ||
       !Number.isFinite(areaAcres)
     ) {
-      alert('Please enter valid latitude, longitude and area values.');
+      notify('Please enter valid latitude, longitude and area values.', 'error');
       return;
     }
 
@@ -282,7 +323,7 @@ export default function App() {
     };
 
     if (!payload.name || !payload.location) {
-      alert('Please fill in Field Name and Location.');
+      notify('Please fill in Field Name and Location.', 'error');
       return;
     }
 
@@ -290,7 +331,6 @@ export default function App() {
 
     try {
       if (editingField) {
-        // UPDATE
         const updated = await apiRequest(
           `/fields/${editingField.id}`,
           {
@@ -305,7 +345,6 @@ export default function App() {
           )
         );
 
-        // Keep currently open analysis information in sync.
         if (analyzingField?.id === updated.id) {
           setAnalyzingField(updated);
         }
@@ -313,9 +352,8 @@ export default function App() {
         setShowModal(false);
         setEditingField(null);
 
-        alert('Field updated successfully.');
+        notify('Field updated successfully.', 'success');
       } else {
-        // CREATE
         const created = await apiRequest('/fields', {
           method: 'POST',
           body: JSON.stringify(payload),
@@ -325,11 +363,10 @@ export default function App() {
 
         setShowModal(false);
 
-        alert('Field registered successfully.');
+        notify('Field registered successfully.', 'success');
       }
     } catch (error) {
-      console.error('Failed to save field:', error);
-      alert(`Failed to save field.\n\n${error.message}`);
+      notify(`Failed to save field: ${error.message}`, 'error');
     } finally {
       setSavingField(false);
     }
@@ -351,9 +388,7 @@ export default function App() {
 
       setAnalysisResult(data);
     } catch (error) {
-      console.error('Error analyzing field:', error);
-      alert(`Unable to analyze field.\n\n${error.message}`);
-
+      notify(`Unable to analyze field: ${error.message}`, 'error');
       setAnalysisResult(null);
     } finally {
       setAnalysisLoading(false);
@@ -379,7 +414,7 @@ export default function App() {
       !Number.isFinite(humidity) ||
       !Number.isFinite(soilMoisture)
     ) {
-      alert('Please enter valid IoT sensor values.');
+      notify('Please enter valid IoT sensor values.', 'error');
       return;
     }
 
@@ -394,10 +429,10 @@ export default function App() {
         }),
       });
 
+      notify('ESP32 telemetry recorded.', 'success');
       await handleAnalyzeField(analyzingField);
     } catch (error) {
-      console.error('Failed to submit IoT telemetry:', error);
-      alert(`Failed to submit IoT telemetry.\n\n${error.message}`);
+      notify(`Failed to submit IoT telemetry: ${error.message}`, 'error');
     }
   };
 
@@ -407,18 +442,24 @@ export default function App() {
   if (!isLoggedIn) {
     return (
       <div className="auth-container" id="auth_container">
+        {notification && (
+          <div className={`toast toast-${notification.type}`} role="status">
+            {notification.message}
+          </div>
+        )}
         <div className="auth-card">
           <div className="auth-header">
             <div className="auth-logo-icon">🌾</div>
 
             <h2>AgriShield AI</h2>
 
-            <p>
-              Smart India Hackathon • Farmer Portal Login
+            <p>Smart India Hackathon • Farmer Portal Login</p>
+            <p style={{ fontSize: 11, color: '#64748b', marginTop: 6 }}>
+              Demo authentication — no password verification
             </p>
           </div>
 
-          <form onSubmit={handleLogin}>
+          <form onSubmit={handleLogin} noValidate>
             <div className="form-group">
               <label>Farmer Name</label>
 
@@ -531,6 +572,11 @@ export default function App() {
 
   return (
     <div className="app-container" id="app_root">
+      {notification && (
+        <div className={`toast toast-${notification.type}`} role="status">
+          {notification.message}
+        </div>
+      )}
       {/* =========================
           Sidebar
       ========================= */}
@@ -571,9 +617,7 @@ export default function App() {
           <div className="top-bar-title">
             <h2>Agricultural Field Dashboard</h2>
 
-            <p>
-              End-to-End AI Crop Risk Prediction & Environmental Intelligence
-            </p>
+            <p>End-to-End AI Crop Risk Prediction & Environmental Intelligence</p>
           </div>
 
           <div className="user-control">
@@ -595,9 +639,7 @@ export default function App() {
 
           <div className="stat-card" id="stat_total_acres">
             <div className="stat-title">Total Cultivated Area</div>
-            <div className="stat-value">
-              {totalAcres.toFixed(1)} Acres
-            </div>
+            <div className="stat-value">{totalAcres.toFixed(1)} Acres</div>
           </div>
 
           <div className="stat-card" id="stat_crops_cultivated">
@@ -610,9 +652,7 @@ export default function App() {
             Field Header
         ========================= */}
         <div className="section-header">
-          <h3>
-            My Agricultural Fields ({fields.length})
-          </h3>
+          <h3>My Agricultural Fields ({fields.length})</h3>
 
           <button
             className="btn-primary"
@@ -637,9 +677,9 @@ export default function App() {
               padding: 40,
             }}
           >
-            <p>
-              No fields registered yet. Click &apos;Register Field&apos;
-              above to register your first agricultural plot.
+            <p>No fields registered yet. Click &apos;Register Field&apos; above to register your first agricultural plot.</p>
+            <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
+              Your fields will appear here once you add them.
             </p>
           </div>
         ) : (
@@ -651,37 +691,27 @@ export default function App() {
                 id={`field_card_${field.id}`}
               >
                 <div className="field-card-header">
-                  <span className="field-name">
-                    {field.name}
-                  </span>
+                  <span className="field-name">{field.name}</span>
 
-                  <span className="crop-badge">
-                    {field.crop}
-                  </span>
+                  <span className="crop-badge">{field.crop}</span>
                 </div>
 
                 <div className="field-detail-row">
                   <User size={15} />
 
-                  <span>
-                    Farmer: {field.farmer_name || currentUser}
-                  </span>
+                  <span>Farmer: {field.farmer_name || currentUser}</span>
                 </div>
 
                 <div className="field-detail-row">
                   <MapPin size={15} />
 
-                  <span>
-                    {field.location}
-                  </span>
+                  <span>{field.location}</span>
                 </div>
 
                 <div className="field-detail-row">
                   <Maximize2 size={15} />
 
-                  <span>
-                    Area: {field.area_acres} Acres
-                  </span>
+                  <span>Area: {field.area_acres} Acres</span>
                 </div>
 
                 <div className="field-coords">
@@ -693,11 +723,9 @@ export default function App() {
                       verticalAlign: 'middle',
                     }}
                   />
-
                   {field.latitude}° N, {field.longitude}° E
                 </div>
 
-                {/* Analyze */}
                 <button
                   className="btn-analyze"
                   id={`btn_analyze_${field.id}`}
@@ -707,7 +735,6 @@ export default function App() {
                   <span>Analyze Field</span>
                 </button>
 
-                {/* Edit / Delete */}
                 <div className="field-actions">
                   <button
                     type="button"
@@ -729,9 +756,7 @@ export default function App() {
                   >
                     <Trash2 size={14} />
 
-                    {deletingFieldId === field.id
-                      ? 'Deleting...'
-                      : 'Delete'}
+                    {deletingFieldId === field.id ? 'Deleting...' : 'Delete'}
                   </button>
                 </div>
               </div>
@@ -747,11 +772,7 @@ export default function App() {
         <div className="modal-overlay" id="field_modal">
           <div className="modal-card">
             <div className="modal-header">
-              <h4>
-                {editingField
-                  ? 'Edit Field Record'
-                  : 'Register Agricultural Field'}
-              </h4>
+              <h4>{editingField ? 'Edit Field Record' : 'Register Agricultural Field'}</h4>
 
               <button
                 type="button"
@@ -773,7 +794,7 @@ export default function App() {
               </button>
             </div>
 
-            <form onSubmit={handleSubmitField}>
+            <form onSubmit={handleSubmitField} noValidate>
               <div className="form-group">
                 <label>Farmer Name</label>
 
@@ -826,10 +847,7 @@ export default function App() {
               </div>
 
               <div className="form-row">
-                <div
-                  className="form-group"
-                  style={{ flex: 1 }}
-                >
+                <div className="form-group" style={{ flex: 1 }}>
                   <label>Latitude (°N)</label>
 
                   <input
@@ -847,10 +865,7 @@ export default function App() {
                   />
                 </div>
 
-                <div
-                  className="form-group"
-                  style={{ flex: 1 }}
-                >
+                <div className="form-group" style={{ flex: 1 }}>
                   <label>Longitude (°E)</label>
 
                   <input
@@ -870,10 +885,7 @@ export default function App() {
               </div>
 
               <div className="form-row">
-                <div
-                  className="form-group"
-                  style={{ flex: 1 }}
-                >
+                <div className="form-group" style={{ flex: 1 }}>
                   <label>Crop Cultivated</label>
 
                   <select
@@ -886,22 +898,15 @@ export default function App() {
                     }
                   >
                     <option value="Wheat">Wheat</option>
-                    <option value="Rice / Paddy">
-                      Rice / Paddy
-                    </option>
+                    <option value="Rice / Paddy">Rice / Paddy</option>
                     <option value="Mustard">Mustard</option>
                     <option value="Maize">Maize</option>
                     <option value="Cotton">Cotton</option>
-                    <option value="Sugarcane">
-                      Sugarcane
-                    </option>
+                    <option value="Sugarcane">Sugarcane</option>
                   </select>
                 </div>
 
-                <div
-                  className="form-group"
-                  style={{ flex: 1 }}
-                >
+                <div className="form-group" style={{ flex: 1 }}>
                   <label>Area (Acres)</label>
 
                   <input
@@ -937,11 +942,7 @@ export default function App() {
                   id="btn_save_field"
                   disabled={savingField}
                 >
-                  {savingField
-                    ? editingField
-                      ? 'Updating...'
-                      : 'Saving...'
-                    : 'Save Field'}
+                  {savingField ? (editingField ? 'Updating...' : 'Saving...') : 'Save Field'}
                 </button>
               </div>
             </form>
@@ -957,9 +958,7 @@ export default function App() {
           <div className="modal-card analysis-modal-card">
             <div className="modal-header">
               <div>
-                <h4>
-                  Field Intelligence & Risk Assessment
-                </h4>
+                <h4>Field Intelligence & Risk Assessment</h4>
 
                 <p
                   style={{
@@ -1008,9 +1007,7 @@ export default function App() {
                   }}
                 />
 
-                <p style={{ fontWeight: 600 }}>
-                  Running XGBoost Risk Prediction Pipeline...
-                </p>
+                <p style={{ fontWeight: 600 }}>Running Risk Prediction Pipeline...</p>
 
                 <p
                   style={{
@@ -1025,11 +1022,7 @@ export default function App() {
             ) : (
               analysisResult && (
                 <div>
-                  {/* Risk Banner */}
-                  <div
-                    className={`risk-banner ${analysisResult.risk_level}`}
-                    id="risk_banner"
-                  >
+                  <div className={`risk-banner ${analysisResult.risk_level}`} id="risk_banner">
                     <div>
                       <div
                         style={{
@@ -1044,23 +1037,15 @@ export default function App() {
                       </div>
 
                       <div className="risk-score-display">
-                        <span className="risk-score-number">
-                          {analysisResult.risk_score}
-                        </span>
+                        <span className="risk-score-number">{analysisResult.risk_score}</span>
 
-                        <span className="risk-score-max">
-                          / 100
-                        </span>
+                        <span className="risk-score-max">/ 100</span>
                       </div>
                     </div>
 
                     <div style={{ textAlign: 'right' }}>
-                      <span
-                        className={`risk-badge ${analysisResult.risk_level}`}
-                        id="risk_badge"
-                      >
-                        {analysisResult.risk_level} •{' '}
-                        {analysisResult.risk_label}
+                      <span className={`risk-badge ${analysisResult.risk_level}`} id="risk_badge">
+                        {analysisResult.risk_level} • {analysisResult.risk_label}
                       </span>
 
                       <p
@@ -1076,48 +1061,33 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Data Sources */}
                   <div className="source-badges-row">
-                    <div
-                      className={`source-badge ${analysisResult.data_sources.weather}`}
-                    >
+                    <div className={`source-badge ${analysisResult.data_sources.weather}`}>
                       <CloudSun size={14} />
 
                       <span>
                         Live Weather — Open-Meteo (
-                        {analysisResult.data_sources.weather ===
-                        'live'
-                          ? 'Live GPS'
-                          : 'Demo Fallback'}
-                        )
+                        {analysisResult.data_sources.weather === 'live' ? 'Live GPS' : 'Demo Fallback'})
                       </span>
                     </div>
 
-                    <div
-                      className={`source-badge ${analysisResult.data_sources.ndvi}`}
-                    >
+                    <div className={`source-badge ${analysisResult.data_sources.ndvi}`}>
                       <Sprout size={14} />
 
-                      <span>
-                        NDVI — Demo
-                      </span>
+                      <span>NDVI — Demo</span>
                     </div>
 
-                    <div
-                      className={`source-badge ${analysisResult.data_sources.iot}`}
-                    >
+                    <div className={`source-badge ${analysisResult.data_sources.iot}`}>
                       <Radio size={14} />
 
                       <span>
-                        {analysisResult.data_sources.iot ===
-                        'esp32'
+                        {analysisResult.data_sources.iot === 'esp32'
                           ? 'IoT — ESP32 Telemetry'
                           : 'IoT — Demo'}
                       </span>
                     </div>
                   </div>
 
-                  {/* Environmental Snapshot */}
                   <h5
                     style={{
                       fontSize: 14,
@@ -1130,128 +1100,79 @@ export default function App() {
 
                   <div className="env-snapshot-grid">
                     <div className="env-card">
-                      <div className="env-card-label">
-                        Temperature
-                      </div>
+                      <div className="env-card-label">Temperature</div>
 
                       <div className="env-card-val">
-                        {
-                          analysisResult
-                            .environmental_snapshot
-                            .temperature
-                        }
-                        °C
+                        {analysisResult.environmental_snapshot.temperature}°C
                       </div>
                     </div>
 
                     <div className="env-card">
-                      <div className="env-card-label">
-                        Humidity
-                      </div>
+                      <div className="env-card-label">Humidity</div>
 
                       <div className="env-card-val">
-                        {
-                          analysisResult
-                            .environmental_snapshot
-                            .humidity
-                        }
-                        %
+                        {analysisResult.environmental_snapshot.humidity}%
                       </div>
                     </div>
 
                     <div className="env-card">
-                      <div className="env-card-label">
-                        Rainfall
-                      </div>
+                      <div className="env-card-label">Rainfall</div>
 
                       <div className="env-card-val">
-                        {
-                          analysisResult
-                            .environmental_snapshot
-                            .rainfall
-                        }{' '}
-                        mm
+                        {analysisResult.environmental_snapshot.rainfall} mm
                       </div>
                     </div>
 
                     <div className="env-card">
-                      <div className="env-card-label">
-                        Soil Moisture
-                      </div>
+                      <div className="env-card-label">Soil Moisture</div>
 
                       <div className="env-card-val">
-                        {
-                          analysisResult
-                            .environmental_snapshot
-                            .soil_moisture
-                        }
-                        %
+                        {analysisResult.environmental_snapshot.soil_moisture}%
                       </div>
                     </div>
 
                     <div className="env-card">
-                      <div className="env-card-label">
-                        Vegetation (NDVI)
-                      </div>
+                      <div className="env-card-label">Vegetation (NDVI)</div>
 
                       <div className="env-card-val">
-                        {
-                          analysisResult
-                            .environmental_snapshot
-                            .ndvi
-                        }
+                        {analysisResult.environmental_snapshot.ndvi}
                       </div>
                     </div>
                   </div>
 
-                  {/* Recommendations */}
                   <div className="recommendations-box">
-                    <h5>
-                      Preventive Measures & Agronomic Action
-                    </h5>
+                    <h5>Preventive Measures & Agronomic Action</h5>
 
                     <ul className="recommendations-list">
-                      {analysisResult.recommendations.map(
-                        (recommendation, index) => (
-                          <li
-                            key={index}
-                            className="recommendation-item"
-                          >
-                            {analysisResult.risk_score <=
-                            50 ? (
-                              <CheckCircle2
-                                size={16}
-                                style={{
-                                  flexShrink: 0,
-                                  marginTop: 2,
-                                }}
-                              />
-                            ) : (
-                              <AlertTriangle
-                                size={16}
-                                style={{
-                                  flexShrink: 0,
-                                  marginTop: 2,
-                                }}
-                              />
-                            )}
+                      {analysisResult.recommendations.map((recommendation, index) => (
+                        <li key={index} className="recommendation-item">
+                          {analysisResult.risk_score <= 50 ? (
+                            <CheckCircle2
+                              size={16}
+                              style={{
+                                flexShrink: 0,
+                                marginTop: 2,
+                              }}
+                            />
+                          ) : (
+                            <AlertTriangle
+                              size={16}
+                              style={{
+                                flexShrink: 0,
+                                marginTop: 2,
+                              }}
+                            />
+                          )}
 
-                            <span>
-                              {recommendation}
-                            </span>
-                          </li>
-                        )
-                      )}
+                          <span>{recommendation}</span>
+                        </li>
+                      ))}
                     </ul>
                   </div>
 
-                  {/* IoT Tester */}
                   <div className="iot-tester-box">
                     <div className="iot-tester-header">
-                      <span>
-                        ESP32 Hardware Telemetry Tester
-                        (SIH Demonstration Tool)
-                      </span>
+                      <span>ESP32 Hardware Telemetry Tester (SIH Demonstration Tool)</span>
 
                       <button
                         type="button"
@@ -1261,25 +1182,14 @@ export default function App() {
                           fontSize: 11,
                           flex: 'none',
                         }}
-                        onClick={() =>
-                          setShowIoTTester(
-                            (previous) => !previous
-                          )
-                        }
+                        onClick={() => setShowIoTTester((previous) => !previous)}
                       >
-                        {showIoTTester
-                          ? 'Hide'
-                          : 'Test Hardware Ingestion'}
+                        {showIoTTester ? 'Hide' : 'Test Hardware Ingestion'}
                       </button>
                     </div>
 
                     {showIoTTester && (
-                      <form
-                        onSubmit={
-                          handleSendIotAndReanalyze
-                        }
-                        style={{ marginTop: 10 }}
-                      >
+                      <form onSubmit={handleSendIotAndReanalyze} style={{ marginTop: 10 }} noValidate>
                         <div className="form-row">
                           <div
                             className="form-group"
@@ -1288,23 +1198,16 @@ export default function App() {
                               marginBottom: 8,
                             }}
                           >
-                            <label
-                              style={{ fontSize: 11 }}
-                            >
-                              Temp (°C)
-                            </label>
+                            <label style={{ fontSize: 11 }}>Temp (°C)</label>
 
                             <input
                               type="number"
                               step="0.1"
-                              value={
-                                iotPayload.temperature
-                              }
+                              value={iotPayload.temperature}
                               onChange={(e) =>
                                 setIotPayload({
                                   ...iotPayload,
-                                  temperature:
-                                    e.target.value,
+                                  temperature: e.target.value,
                                 })
                               }
                             />
@@ -1317,23 +1220,16 @@ export default function App() {
                               marginBottom: 8,
                             }}
                           >
-                            <label
-                              style={{ fontSize: 11 }}
-                            >
-                              Humidity (%)
-                            </label>
+                            <label style={{ fontSize: 11 }}>Humidity (%)</label>
 
                             <input
                               type="number"
                               step="0.1"
-                              value={
-                                iotPayload.humidity
-                              }
+                              value={iotPayload.humidity}
                               onChange={(e) =>
                                 setIotPayload({
                                   ...iotPayload,
-                                  humidity:
-                                    e.target.value,
+                                  humidity: e.target.value,
                                 })
                               }
                             />
@@ -1346,23 +1242,16 @@ export default function App() {
                               marginBottom: 8,
                             }}
                           >
-                            <label
-                              style={{ fontSize: 11 }}
-                            >
-                              Soil Moisture (%)
-                            </label>
+                            <label style={{ fontSize: 11 }}>Soil Moisture (%)</label>
 
                             <input
                               type="number"
                               step="0.1"
-                              value={
-                                iotPayload.soil_moisture
-                              }
+                              value={iotPayload.soil_moisture}
                               onChange={(e) =>
                                 setIotPayload({
                                   ...iotPayload,
-                                  soil_moisture:
-                                    e.target.value,
+                                  soil_moisture: e.target.value,
                                 })
                               }
                             />
@@ -1381,10 +1270,7 @@ export default function App() {
                         >
                           <Send size={13} />
 
-                          <span>
-                            Send ESP32 Telemetry & Re-run
-                            Risk Model
-                          </span>
+                          <span>Send ESP32 Telemetry & Re-run Risk Model</span>
                         </button>
                       </form>
                     )}
